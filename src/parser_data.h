@@ -131,7 +131,6 @@ struct ly_in;
  * - all types are fully resolved (leafref/instance-identifier targets, unions) and must be valid (lists have
  * all the keys, leaf(-lists) correct values),
  * - when statements on existing nodes are evaluated, if not satisfied, a validation error is raised,
- * - if-feature statements are evaluated,
  * - invalid multiple data instances/data from several cases cause a validation error,
  * - implicit nodes (NP containers and default values) are added.
  * @{
@@ -152,6 +151,12 @@ struct ly_in;
 #define LYD_PARSE_LYB_MOD_UPDATE  0x100000  /**< Only for LYB format, allow parsing data printed using a specific module
                                                  revision to be loaded even with a module with the same name but newer
                                                  revision. */
+#define LYD_PARSE_ORDERED 0x200000          /**< Do not search for the correct place of each node but instead expect
+                                                 that the nodes are being parsed in the correct schema-based order,
+                                                 which is always true if the data were printed by libyang and not
+                                                 modified manually. If this flag is used incorrectly (for unordered data),
+                                                 the behavior is undefined and most functions executed with these
+                                                 data will not work correctly. */
 
 #define LYD_PARSE_OPTS_MASK 0xFFFF0000      /**< Mask for all the LYD_PARSE_ options. */
 
@@ -342,7 +347,7 @@ enum lyd_type {
  * @param[in] format Expected format of the data in @p in.
  * @param[in] data_type Expected operation to parse (@ref datatype).
  * @param[out] tree Optional full parsed data tree. If @p parent is set, set to NULL.
- * @param[out] op Optional parsed operation node.
+ * @param[out] op Optional pointer to the operation (action/RPC) node.
  * @return LY_ERR value.
  * @return LY_ENOT if @p data_type is a NETCONF message and the root XML element is not the expected one.
  */
@@ -385,7 +390,7 @@ LY_ERR lyd_parse_op(const struct ly_ctx *ctx, struct lyd_node *parent, struct ly
  * @param[in] format Expected format of the data in @p in.
  * @param[in] data_type Expected operation to parse (@ref datatype).
  * @param[out] tree Optional full parsed data tree. If @p parent is set, set to NULL.
- * @param[out] op Optional parsed operation node.
+ * @param[out] op Optional pointer to the operation (action/RPC) node.
  * @return LY_ERR value.
  * @return LY_ENOT if @p data_type is a NETCONF message and the root XML element is not the expected one.
  */

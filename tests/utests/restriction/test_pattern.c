@@ -82,11 +82,10 @@ static void
 test_schema_yang(void **state)
 {
     const char *schema;
-    const struct lys_module *mod;
+    struct lys_module *mod;
     struct lysc_node_leaf *lysc_leaf;
     struct lysp_node_leaf *lysp_leaf;
     struct lysc_pattern *pattern;
-    struct lysc_range *range;
 
     schema = MODULE_CREATE_YANG("T0", "leaf port {type string {"
             "pattern \"[A-Za-z]*\"{"
@@ -181,11 +180,10 @@ static void
 test_schema_yin(void **state)
 {
     const char *schema;
-    const struct lys_module *mod;
+    struct lys_module *mod;
     struct lysc_node_leaf *lysc_leaf;
     struct lysp_node_leaf *lysp_leaf;
     struct lysc_pattern *pattern;
-    struct lysc_range *range;
 
     schema = MODULE_CREATE_YIN("T0", "<leaf name=\"port\"> <type name=\"string\">"
             "<pattern value=\"[A-Za-z]*\">"
@@ -288,7 +286,7 @@ test_schema_print(void **state)
 {
     const char *schema_yang, *schema_yin;
     char *printed;
-    const struct lys_module *mod;
+    struct lys_module *mod;
 
     /* test print yang to yin */
     schema_yang = MODULE_CREATE_YANG("PRINT0", "leaf port {type string {"
@@ -320,6 +318,7 @@ test_schema_print(void **state)
 
     /* test print yin to yang */
     schema_yang = MODULE_CREATE_YANG("PRINT1",
+            "\n"
             "  leaf port {\n"
             "    type string {\n"
             "      pattern \"[A-Z]*\" {\n"

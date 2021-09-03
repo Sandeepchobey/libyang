@@ -473,29 +473,34 @@ lyb_print_data_models(struct ly_out *out, const struct lyd_node *root, struct ly
     LY_ARRAY_COUNT_TYPE u;
     LY_ERR ret = LY_SUCCESS;
     struct lys_module *mod;
-    const struct lyd_node *node;
+    const struct lyd_node *elem, *node;
     uint32_t i;
 
     LY_CHECK_RET(ly_set_new(&set));
 
     /* collect all data node modules */
-    LY_LIST_FOR(root, node) {
-        if (!node->schema) {
-            continue;
-        }
+    LY_LIST_FOR(root, elem) {
+        LYD_TREE_DFS_BEGIN(elem, node) {
+            if (node->schema) {
+                mod = node->schema->module;
+                ret = ly_set_add(set, mod, 0, NULL);
+                LY_CHECK_GOTO(ret, cleanup);
 
-        mod = node->schema->module;
-        ret = ly_set_add(set, mod, 0, NULL);
-        LY_CHECK_GOTO(ret, cleanup);
+                /* add also their modules deviating or augmenting them */
+                LY_ARRAY_FOR(mod->deviated_by, u) {
+                    ret = ly_set_add(set, mod->deviated_by[u], 0, NULL);
+                    LY_CHECK_GOTO(ret, cleanup);
+                }
+                LY_ARRAY_FOR(mod->augmented_by, u) {
+                    ret = ly_set_add(set, mod->augmented_by[u], 0, NULL);
+                    LY_CHECK_GOTO(ret, cleanup);
+                }
 
-        /* add also their modules deviating or augmenting them */
-        LY_ARRAY_FOR(mod->deviated_by, u) {
-            ret = ly_set_add(set, mod->deviated_by[u], 0, NULL);
-            LY_CHECK_GOTO(ret, cleanup);
-        }
-        LY_ARRAY_FOR(mod->augmented_by, u) {
-            ret = ly_set_add(set, mod->augmented_by[u], 0, NULL);
-            LY_CHECK_GOTO(ret, cleanup);
+                /* only top-level nodes are processed */
+                LYD_TREE_DFS_continue = 1;
+            }
+
+            LYD_TREE_DFS_END(elem, node);
         }
     }
 
@@ -579,7 +584,7 @@ lyb_print_prefix_data(struct ly_out *out, LY_VALUE_FORMAT format, const void *pr
         }
 
         /* write number of prefixes on 1 byte */
-        LY_CHECK_RET(lyb_write(out, (uint8_t *)&set->count, 1, lybctx));
+        LY_CHECK_RET(lyb_write_number(set->count, 1, out, lybctx));
 
         /* write all the prefixes */
         for (i = 0; i < set->count; ++i) {
@@ -623,14 +628,14 @@ lyb_print_opaq(struct lyd_node_opaq *opaq, struct ly_out *out, struct lylyb_ctx 
     /* name */
     LY_CHECK_RET(lyb_write_string(opaq->name.name, 0, 1, out, lybctx));
 
+    /* value */
+    LY_CHECK_RET(lyb_write_string(opaq->value, 0, 1, out, lybctx));
+
     /* format */
     LY_CHECK_RET(lyb_write_number(opaq->format, 1, out, lybctx));
 
     /* value prefixes */
     LY_CHECK_RET(lyb_print_prefix_data(out, opaq->format, opaq->val_prefix_data, lybctx));
-
-    /* value */
-    LY_CHECK_RET(lyb_write_string(opaq->value, 0, 0, out, lybctx));
 
     return LY_SUCCESS;
 }
@@ -661,7 +666,7 @@ lyb_print_anydata(struct lyd_node_any *anydata, struct ly_out *out, struct lylyb
     }
 
     /* first byte is type */
-    LY_CHECK_GOTO(ret = lyb_write(out, (uint8_t *)&value_type, sizeof value_type, lybctx), cleanup);
+    LY_CHECK_GOTO(ret = lyb_write_number(value_type, sizeof value_type, out, lybctx), cleanup);
 
     if (anydata->value_type == LYD_ANYDATA_DATATREE) {
         /* print LYB data tree to memory */
@@ -699,8 +704,64 @@ cleanup:
 static LY_ERR
 lyb_print_term(struct lyd_node_term *term, struct ly_out *out, struct lylyb_ctx *lybctx)
 {
-    /* print the value */
-    return lyb_write_string(lyd_get_value(&term->node), 0, 0, out, lybctx);
+    LY_ERR ret = LY_SUCCESS;
+    ly_bool dynamic = 0;
+    void *value;
+    size_t value_len = 0;
+    int32_t lyb_data_len;
+    lyplg_type_print_clb print;
+
+    assert(term->value.realtype && term->value.realtype->plugin && term->value.realtype->plugin->print &&
+            term->schema);
+
+    /* Get length of LYB data to print. */
+    lyb_data_len = term->value.realtype->plugin->lyb_data_len;
+
+    /* Get value and also print its length only if size is not fixed. */
+    print = term->value.realtype->plugin->print;
+    if (lyb_data_len < 0) {
+        /* Variable-length data. */
+
+        /* Get value and its length from plugin. */
+        value = (void *)print(term->schema->module->ctx, &term->value,
+                LY_VALUE_LYB, NULL, &dynamic, &value_len);
+        LY_CHECK_GOTO(ret, cleanup);
+
+        if (value_len > UINT32_MAX) {
+            LOGERR(lybctx->ctx, LY_EINT, "The maximum length of the LYB data "
+                    "from a term node must not exceed %lu.", UINT32_MAX);
+            ret = LY_EINT;
+            goto cleanup;
+        }
+
+        /* Print the length of the data as 32-bit unsigned integer. */
+        ret = lyb_write_number(value_len, sizeof(uint32_t), out, lybctx);
+        LY_CHECK_GOTO(ret, cleanup);
+    } else {
+        /* Fixed-length data. */
+
+        /* Get value from plugin. */
+        value = (void *)print(term->schema->module->ctx, &term->value,
+                LY_VALUE_LYB, NULL, &dynamic, NULL);
+        LY_CHECK_GOTO(ret, cleanup);
+
+        /* Copy the length from the compiled node. */
+        value_len = lyb_data_len;
+    }
+
+    /* Print value. */
+    if (value_len > 0) {
+        /* Print the value simply as it is. */
+        ret = lyb_write(out, value, value_len, lybctx);
+        LY_CHECK_GOTO(ret, cleanup);
+    }
+
+cleanup:
+    if (dynamic) {
+        free(value);
+    }
+
+    return ret;
 }
 
 /**
@@ -921,8 +982,8 @@ lyb_print_subtree(struct ly_out *out, const struct lyd_node *node, struct hash_t
     /* register a new subtree */
     LY_CHECK_RET(lyb_write_start_subtree(out, lybctx->lybctx));
 
-    /* write model info first */
-    if (!node->schema && !lyd_parent(node)) {
+    /* write model info first, for all opaque and top-level nodes */
+    if (!node->schema && (!node->parent || !node->parent->schema)) {
         LY_CHECK_RET(lyb_print_model(out, NULL, lybctx->lybctx));
     } else if (node->schema && !lysc_data_parent(node->schema)) {
         LY_CHECK_RET(lyb_print_model(out, node->schema->module, lybctx->lybctx));
